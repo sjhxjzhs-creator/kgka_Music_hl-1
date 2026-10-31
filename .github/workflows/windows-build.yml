@@ -1,37 +1,21 @@
 # ============================================================
-# KA Music (kgka_Music_hl) — Windows x64 + x86 构建工作流
-#
-# 用法：
-#   1. Fork 仓库 https://github.com/umr-xiaomai/kgka_Music_hl 到你自己的账号
-#   2. 把本文件复制到你 fork 仓库的 .github/workflows/windows-build.yml
-#   3. 仓库页 → Actions → 左侧 "Windows x64 & x86 Build" → Run workflow
-#   4. 构建完成后在该次运行页面底部 Artifacts 下载两个 zip：
-#        - kgka-music-windows-x64.zip  （64 位，主流 Win10/11）
-#        - kgka-music-windows-x86.zip  （32 位，老机器/32 位系统）
+# KA Music (kgka_Music_hl) — Windows x64 Release 构建
+# 说明：Flutter 3.47+ 在 Windows 上仅支持 x64 与 arm64，
+#       已不再提供 32 位 x86 (win32) 目标。
 # ============================================================
 
-name: Windows x64 & x86 Build
+name: Windows x64 Build
 
 on:
-  workflow_dispatch:    # 手动触发
+  workflow_dispatch:
   push:
     tags:
-      - 'v*'            # 打 v 开头的 tag 时自动发版
+      - 'v*'
 
 jobs:
   build-windows:
-    name: Build ${{ matrix.arch }}
-    runs-on: windows-latest    # 必须是 Windows runner，自带 VS2022 + C++ + Win SDK
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x64
-            platform: windows-x64
-            out_dir: build/windows/x64/runner/Release
-          - arch: x86
-            platform: windows-x86
-            out_dir: build/windows/win32/runner/Release
+    name: Build Windows x64
+    runs-on: windows-latest
     timeout-minutes: 40
 
     steps:
@@ -52,29 +36,27 @@ jobs:
       - name: Analyze (非阻断)
         run: flutter analyze --no-fatal-infos --no-fatal-warnings || true
 
-      - name: Build Windows ${{ matrix.arch }} release
-        run: flutter build windows --release --target-platform ${{ matrix.platform }}
+      - name: Build Windows x64 release
+        run: flutter build windows --release
 
       - name: 列产物
         shell: pwsh
         run: |
           Write-Host "=== Release 目录内容 ==="
-          Get-ChildItem -Path "${{ matrix.out_dir }}" -Recurse |
+          Get-ChildItem -Path "build/windows/x64/runner/Release" -Recurse |
             Select-Object FullName, Length | Format-Table -AutoSize
 
-      - name: 打包 zip（整个 Release 目录，含 exe + flutter_windows.dll + 资源）
+      - name: 打包 zip
         shell: pwsh
         run: |
-          $out = "${{ matrix.out_dir }}"
-          $zip = "kgka-music-windows-${{ matrix.arch }}.zip"
-          Compress-Archive -Path "$out\*" -DestinationPath $zip -Force
-          Write-Host "生成: $zip"
-          Get-Item $zip | Select-Object FullName, Length
+          Compress-Archive -Path "build/windows/x64/runner/Release/*" `
+            -DestinationPath "kgka-music-windows-x64.zip" -Force
+          Get-Item "kgka-music-windows-x64.zip" | Select-Object FullName, Length
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kgka-music-windows-${{ matrix.arch }}
-          path: kgka-music-windows-${{ matrix.arch }}.zip
+          name: kgka-music-windows-x64
+          path: kgka-music-windows-x64.zip
           if-no-files-found: error
           retention-days: 30
