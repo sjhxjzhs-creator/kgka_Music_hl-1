@@ -120,6 +120,40 @@ jobs:
           Write-Host "✅ ZIP created: $zip ($([math]::Round((Get-Item $zip).Length/1MB,1)) MB)"
           "zip=$zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
+      # 安装引导版：Inno Setup 编译 Setup.exe（开始菜单/桌面快捷方式 + 卸载入口）
+      - name: Ensure Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          if (-not (Test-Path $iscc)) { Write-Host '❌ ISCC.exe 不存在'; exit 1 }
+          "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build installer (Inno Setup)
+        id: setup
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path pubspec.yaml -Pattern '^version:\s*(\S+)' |
+                  Select-Object -First 1).Matches[0].Groups[1].Value
+          $src = (Resolve-Path 'build/windows/x64/runner/Release').Path
+          $out = Join-Path (Get-Location).Path 'installer-output'
+          & $env:ISCC "/DAppVersion=$ver" "/DSrcDir=$src" "/DOutDir=$out" 'windows\installer.iss'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $exe = Get-ChildItem -Path $out -Filter '*.exe' | Select-Object -First 1
+          if (-not $exe) { Write-Host '❌ 未产出 Setup.exe'; exit 1 }
+          Write-Host "✅ Installer: $($exe.Name) ($([math]::Round($exe.Length/1MB,1)) MB)"
+          "setup=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload installer as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kgka-music-windows-setup
+          path: ${{ steps.setup.outputs.setup }}
+          if-no-files-found: error
+          retention-days: 30
+
       # 方式一：通过工作流产物 (Artifacts) 提供下载（每次分支推送都会生成）
       - name: Upload ZIP as Artifact
         uses: actions/upload-artifact@v4
@@ -137,7 +171,9 @@ jobs:
         with:
           name: KA Music ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
-          files: ${{ steps.pack.outputs.zip }}
+          files: |
+            ${{ steps.pack.outputs.zip }}
+            ${{ steps.setup.outputs.setup }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
