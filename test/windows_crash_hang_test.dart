@@ -98,7 +98,11 @@ class _H extends Fake implements MusicAudioHandler {
 
 class _A extends Fake implements MusicApi {
   @override
-  Future<PlayUrl> songUrl(Song song, {String? quality}) async =>
+  Future<PlayUrl> songUrl(
+    Song song, {
+    AudioQuality quality = AudioQuality.standard,
+    bool hashOnly = false,
+  }) async =>
       PlayUrl(url: 'https://example.com/a.mp3', hash: song.hash);
 }
 
