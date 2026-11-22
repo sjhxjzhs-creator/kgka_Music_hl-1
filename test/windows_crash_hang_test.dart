@@ -113,7 +113,7 @@ class _A extends Fake implements MusicApi {
       PlayUrl(url: 'https://example.com/a.mp3', hash: song.hash);
 }
 
-class _Auth extends Fake implements AuthController {
+class _Auth extends ChangeNotifier implements AuthController {
   @override
   bool isLiked(Song song) => false;
 }
@@ -182,15 +182,14 @@ void main() {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     player.currentSong = song;
 
-    unawaited(player.prepareRestoredSong());
-    await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump(); // 首帧
-    await tester.pump(const Duration(milliseconds: 50)); // 门控期内
-    expect(handler.loadCalls, 0, reason: '原生就绪门控期内不得发起 load');
-
-    await tester.pump(const Duration(milliseconds: 400)); // 门控释放
-    await tester.pump();
-    expect(handler.loadCalls, 1);
+    await tester.pumpWidget(const SizedBox.shrink()); // 触发首帧回调
+    await tester.runAsync(() async {
+      unawaited(player.prepareRestoredSong());
+      await Future<void>.delayed(const Duration(milliseconds: 50)); // 门控期内
+      expect(handler.loadCalls, 0, reason: '原生就绪门控期内不得发起 load');
+      await Future<void>.delayed(const Duration(milliseconds: 400)); // 门控释放
+      expect(handler.loadCalls, 1);
+    });
   });
 
   testWidgets('Windows 下播放历史歌曲行随 player 重建但被语义树隔离', (tester) async {
