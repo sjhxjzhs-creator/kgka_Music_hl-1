@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:kgka_music_hl/controllers/auth_controller.dart';
 import 'package:kgka_music_hl/controllers/player_controller.dart';
+import 'package:kgka_music_hl/controllers/theme_controller.dart';
 import 'package:kgka_music_hl/models/music_models.dart';
 import 'package:kgka_music_hl/services/music_api.dart';
 import 'package:kgka_music_hl/services/music_audio_handler.dart';
@@ -55,6 +56,8 @@ class _P extends Fake implements AudioPlayer {
   ProcessingState get processingState => ProcessingState.ready;
   @override
   Future<void> setSpeed(double speed) async {}
+  @override
+  Future<void> dispose() async {}
 }
 
 class _H extends Fake implements MusicAudioHandler {
@@ -94,6 +97,10 @@ class _H extends Fake implements MusicAudioHandler {
   void detachTransportControls() {}
   @override
   void setBluetoothLyricsTitleSync(bool enabled) {}
+  @override
+  Future<void> close() async {}
+  @override
+  Future<void> dispose() async {}
 }
 
 class _A extends Fake implements MusicApi {
@@ -145,6 +152,7 @@ void main() {
   late _H handler;
   late _A api;
   late _Session session;
+  late ThemeController theme;
   late PlayerController player;
 
   setUp(() {
@@ -152,6 +160,7 @@ void main() {
     handler = _H();
     api = _A();
     session = _Session();
+    theme = ThemeController();
     player = PlayerController(
       api,
       handler,
@@ -162,6 +171,7 @@ void main() {
   tearDown(() async {
     await Future<void>.delayed(Duration.zero);
     player.dispose();
+    theme.dispose();
     await session.interruptions.close();
     await session.noisy.close();
     await session.devices.close();
@@ -173,6 +183,7 @@ void main() {
     player.currentSong = song;
 
     unawaited(player.prepareRestoredSong());
+    await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(); // 首帧
     await tester.pump(const Duration(milliseconds: 50)); // 门控期内
     expect(handler.loadCalls, 0, reason: '原生就绪门控期内不得发起 load');
