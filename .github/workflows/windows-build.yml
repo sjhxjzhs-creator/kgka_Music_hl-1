@@ -95,6 +95,9 @@ jobs:
       # cl.exe 会自动把 CL 环境变量的内容追加为编译选项，
       # 因此定义该宏即可在不改动任何插件源码的前提下压制此错误。
       # 等上游插件改用 <coroutine> 后，这一步可以删除。
+      - name: Test (回归门禁)
+        run: flutter test
+
       - name: Set MSVC STL1011 compat flag
         shell: pwsh
         run: Add-Content -Path $env:GITHUB_ENV -Value 'CL=/D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS'
