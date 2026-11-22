@@ -11,16 +11,25 @@ import '../models/music_models.dart';
 
 class MusicAudioHandler extends BaseAudioHandler
     with QueueHandler, SeekHandler {
-  MusicAudioHandler() {
-    audioPlayer.playbackEventStream
-        .map(_playbackStateForEvent)
-        .pipe(playbackState);
+  MusicAudioHandler({AudioPlayer? player})
+    : audioPlayer = player ?? AudioPlayer(handleInterruptions: false) {
+    // 注意：不能使用 .map(...).pipe(playbackState)。pipe 内部是常驻
+    // addStream，期间任何外部 playbackState.add()（如 refreshMediaControls）
+    // 都会抛 "Bad state: You cannot add items while items are being added
+    // from addStream"，导致启动阶段白屏。改用 listen + add 的标准写法。
+    audioPlayer.playbackEventStream.listen(
+      (event) => playbackState.add(_playbackStateForEvent(event)),
+    );
   }
 
-  final AudioPlayer audioPlayer = AudioPlayer();
+  // Interruption and disconnect policy belongs to PlayerController. Letting
+  // just_audio resume independently can bypass a user pause or disconnect.
+  final AudioPlayer audioPlayer;
 
   Future<void> Function()? _onNext;
   Future<void> Function()? _onPrevious;
+  void Function()? _onPause;
+  void Function()? _onPlay;
   int _queueIndex = 0;
   Song? _currentSong;
   Song? _sourceSong;
@@ -34,20 +43,113 @@ class MusicAudioHandler extends BaseAudioHandler
   Song? get loadedSong => _sourceSong;
 
   void setBluetoothLyricsTitleSync(bool enabled) {
+    if (_bluetoothLyricsTitleSync == enabled) return;
     _bluetoothLyricsTitleSync = enabled;
+    final song = _currentSong;
+    final item = mediaItem.value;
+    if (song == null || item == null) return;
+    final lyric = item.extras?['currentLyric'] as String?;
+    mediaItem.add(
+      item.copyWith(
+        title: enabled && lyric != null && lyric.isNotEmpty
+            ? lyric
+            : song.title,
+      ),
+    );
   }
 
   void attachTransportControls({
     required Future<void> Function() onNext,
     required Future<void> Function() onPrevious,
+    void Function()? onPause,
+    void Function()? onPlay,
   }) {
     _onNext = onNext;
     _onPrevious = onPrevious;
+    _onPause = onPause;
+    _onPlay = onPlay;
   }
 
   void detachTransportControls() {
     _onNext = null;
     _onPrevious = null;
+    _onPause = null;
+    _onPlay = null;
+  }
+
+  /// 当前歌曲是否已收藏（null 表示未接入收藏能力）。
+  ///
+  /// 由应用层注入，读 [AuthController] 的实时状态；
+  /// 系统媒体通知（锁屏/状态栏）中的收藏按钮用它渲染图标。
+  bool Function()? _isFavoriteProvider;
+
+  /// 系统媒体通知收藏按钮被点击时的回调（由应用层注入）。
+  Future<void> Function()? _onFavorite;
+
+  /// 自定义动作名：系统媒体通知收藏按钮触发后经插件转发到 [customAction]。
+  static const _favoriteActionName = 'toggleFavorite';
+
+  /// 注入收藏能力并立即刷新系统媒体通知。
+  void attachFavoriteControl({
+    required bool Function() isFavorite,
+    required Future<void> Function() onToggle,
+  }) {
+    _isFavoriteProvider = isFavorite;
+    _onFavorite = onToggle;
+    refreshMediaControls();
+  }
+
+  /// 解除收藏能力接入（应用退出时调用）。
+  void detachFavoriteControl() {
+    _isFavoriteProvider = null;
+    _onFavorite = null;
+    refreshMediaControls();
+  }
+
+  /// 上次推送到系统媒体通知的收藏签名（歌曲 hash + 是否已收藏）。
+  String? _lastFavoriteSignature;
+
+  /// 收藏/登录/切歌等外部状态变化后刷新系统媒体通知上的控件图标。
+  ///
+  /// 仅当收藏签名（歌曲 + 喜欢状态）变化时才推送，避免登录态等高频 notify
+  /// 触发无意义的 MediaSession/通知重建。歌曲切换本身由
+  /// playbackEventStream 的 listen 自动重建。
+  void refreshMediaControls() {
+    if (_isFavoriteProvider == null) return;
+    final song = _currentSong;
+    final signature =
+        '${song?.hash ?? ''}|${song != null && _isFavoriteProvider!()}';
+    if (signature == _lastFavoriteSignature) return;
+    _lastFavoriteSignature = signature;
+    playbackState.add(_playbackStateForEvent(audioPlayer.playbackEvent));
+  }
+
+  /// 系统媒体通知中的收藏控件：仅酷狗音源注入后可见。
+  MediaControl? _buildFavoriteControl() {
+    final provider = _isFavoriteProvider;
+    if (provider == null) return null;
+    final song = _currentSong;
+    if (song == null) return null;
+    final liked = provider();
+    return MediaControl.custom(
+      androidIcon: liked
+          ? 'drawable/ic_media_favorite_on'
+          : 'drawable/ic_media_favorite_off',
+      label: liked ? '取消收藏' : '收藏',
+      name: _favoriteActionName,
+    );
+  }
+
+  /// 系统媒体通知自定义动作入口（收藏按钮经由 audio_service 转发到此）。
+  @override
+  Future<dynamic> customAction(
+    String name, [
+    Map<String, dynamic>? extras,
+  ]) async {
+    if (name == _favoriteActionName) {
+      await _onFavorite?.call();
+    }
+    return null;
   }
 
   Future<void> loadSong({
@@ -89,7 +191,21 @@ class MusicAudioHandler extends BaseAudioHandler
     _queueIndex = queueIndex < 0 ? 0 : queueIndex;
     queue.add(queueSongs.map(_mediaItemFor).toList(growable: false));
     if (currentSong != null) {
-      mediaItem.add(_mediaItemFor(currentSong));
+      final previous = mediaItem.value;
+      final sameSong =
+          previous?.id ==
+          (currentSong.hash.isEmpty ? currentSong.id : currentSong.hash);
+      final extras = previous?.extras;
+      if (sameSong && extras?.containsKey('currentLyric') == true) {
+        updateLyricMetadata(
+          lyricText: extras!['currentLyric'] as String?,
+          translationText: extras['translationLyric'] as String?,
+          romanizationText: extras['romanLyric'] as String?,
+          fullLyricLrc: extras['full_lrc'] as String?,
+        );
+      } else {
+        mediaItem.add(_mediaItemFor(currentSong));
+      }
     }
   }
 
@@ -135,12 +251,14 @@ class MusicAudioHandler extends BaseAudioHandler
       if (translationText != null) 'translationLyric': translationText,
       if (romanizationText != null) 'romanLyric': romanizationText,
       if (fullLyricLrc != null) 'full_lrc': fullLyricLrc,
-      if (fullLyricLrc != null) 'org.akanework.lyricinfo.FULL_LYRICS': fullLyricLrc,
+      if (fullLyricLrc != null)
+        'org.akanework.lyricinfo.FULL_LYRICS': fullLyricLrc,
       if (lyricText != null) 'org.akanework.lyricinfo.CURRENT_LYRIC': lyricText,
       if (lyricInfoJson != null) 'lyricInfo': lyricInfoJson,
     };
 
-    final title = (_bluetoothLyricsTitleSync && lyricText != null && lyricText.isNotEmpty)
+    final title =
+        (_bluetoothLyricsTitleSync && lyricText != null && lyricText.isNotEmpty)
         ? lyricText
         : song.title;
 
@@ -159,7 +277,8 @@ class MusicAudioHandler extends BaseAudioHandler
   int _playSessionId = 0;
 
   @override
-  Future<void> play() async {
+  Future<void> play({bool userInitiated = true}) async {
+    if (userInitiated) _onPlay?.call();
     final sessionId = ++_playSessionId;
     Object? lastError;
 
@@ -185,7 +304,9 @@ class MusicAudioHandler extends BaseAudioHandler
             final session = await AudioSession.instance;
             await session.setActive(true);
           } catch (e) {
-            debugPrint('[KA Music][playback] audio session setActive failed: $e');
+            debugPrint(
+              '[KA Music][playback] audio session setActive failed: $e',
+            );
           }
         }
         if (sessionId != _playSessionId) return;
@@ -233,16 +354,14 @@ class MusicAudioHandler extends BaseAudioHandler
     if (sessionId == _playSessionId) {
       throw StateError('无法自动开始播放：${lastError ?? '未知错误'}');
     }
-
   }
 
   @override
-  Future<void> pause() async {
+  Future<void> pause({bool userInitiated = true}) async {
+    if (userInitiated) _onPause?.call();
     _playSessionId++;
     await audioPlayer.pause();
   }
-
-
 
   @override
   Future<void> seek(Duration position) async {
@@ -261,6 +380,7 @@ class MusicAudioHandler extends BaseAudioHandler
 
   @override
   Future<void> stop() async {
+    _onPause?.call();
     _playSessionId++;
     await audioPlayer.stop();
   }
@@ -282,11 +402,15 @@ class MusicAudioHandler extends BaseAudioHandler
   }
 
   PlaybackState _playbackStateForEvent(PlaybackEvent event) {
+    // 收藏控件固定追加在末尾：androidCompactActionIndices 指向 0-2 的
+    // 标准（上一首/播放/下一首）控件，无论是否插入收藏都不受影响。
+    final favoriteControl = _buildFavoriteControl();
     return PlaybackState(
       controls: [
         MediaControl.skipToPrevious,
         if (audioPlayer.playing) MediaControl.pause else MediaControl.play,
         MediaControl.skipToNext,
+        if (favoriteControl != null) favoriteControl,
       ],
       systemActions: const {
         MediaAction.seek,

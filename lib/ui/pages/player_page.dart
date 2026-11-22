@@ -26,6 +26,7 @@ import '../widgets/blurred_lyric_view.dart';
 import '../widgets/retryable_network_image.dart';
 import '../widgets/playback_speed_sheet.dart';
 import '../widgets/sleep_timer_sheet.dart';
+import '../widgets/favorite_button.dart';
 import '../widgets/song_action_sheets.dart';
 import '../widgets/toast.dart';
 import '../widgets/marquee_text.dart';
@@ -156,6 +157,7 @@ class _PlayerPageState extends State<PlayerPage> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
+                  trailing: FavoriteIconButton(song: song, auth: widget.auth),
                   onTap: () {
                     Navigator.of(context).pop();
                     widget.player.playSong(
@@ -745,7 +747,7 @@ class _LandscapeHeader extends StatelessWidget {
             title: '桌面歌词',
             subtitle: player.desktopLyricsEnabled ? '已开启' : '已关闭',
             onTap: () async {
-              Navigator.of(context).pop();
+              // 操作面板已关闭，不能再 pop 承载播放器的页面。
               await player.setDesktopLyricsEnabled(!player.desktopLyricsEnabled);
             },
           ),
@@ -1450,7 +1452,7 @@ class _TopBar extends StatelessWidget {
             title: '桌面歌词',
             isGrid: true,
             onTap: () async {
-              Navigator.of(context).pop();
+              // 操作面板已关闭，不能再 pop 承载播放器的页面。
               await player.setDesktopLyricsEnabled(!player.desktopLyricsEnabled);
             },
           ),
